@@ -29,6 +29,7 @@ DEALINGS IN THE SOFTWARE.
 #ifdef MICROBIT_SAMPLE_ACCELEROMETER_DEMO
 
 MicroBit uBit;
+//MicroBitSerial serial(USBTX, USBRX);
 
 //
 // Scales the given value that is in the -1024 to 1024 range
@@ -59,13 +60,25 @@ int main()
     // Periodically read the accelerometer x and y values, and plot a 
     // scaled version of this ont the display. 
     //
+    uBit.accelerometer.configure();
+//     serial.baud(115200);
+//     serial.send("hi joerg\n\r");
+
     while(1)
     {
-        int x = pixel_from_g(uBit.accelerometer.getX());
-        int y = pixel_from_g(uBit.accelerometer.getY());
-
+	    int rx = uBit.accelerometer.getX();
+	    int ry = uBit.accelerometer.getY();
+	    int x = pixel_from_g(uBit.accelerometer.getX());
+	    int y = pixel_from_g(uBit.accelerometer.getY());
+	    //	int id = uBit.accelerometer.whoAmI();
+// 	    serial.send("x=");
+// 	    serial.send(rx);
+// 	    serial.send("\r\n");
+// 	    serial.send("y=");
+// 	    serial.send(ry);
+// 	    serial.send("\r\n");
         uBit.display.image.clear();
-        uBit.display.image.setPixelValue(x, y, 255);
+        uBit.display.image.setPixelValue(y, x, 255);
         
         uBit.sleep(100);
     }
