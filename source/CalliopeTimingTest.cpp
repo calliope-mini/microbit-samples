@@ -1,6 +1,5 @@
 #include "MicroBit.h" 
 #include "CalliopeRGB.h" 
-#include "CalliopeSoundMotor.h" 
 
 MicroBit uBit;
 CalliopeRGB                 rgb;
