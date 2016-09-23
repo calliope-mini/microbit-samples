@@ -32,7 +32,7 @@ DEALINGS IN THE SOFTWARE.
 #include "MicroBitComponent.h"
 
 //Pin of RGB LED on the MicroBit
-#define CALLIOPE_PIN_RGB                    P0_0
+#define CALLIOPE_PIN_RGB                    P0_2
 
 //assembler code: do nothing
 #define RGB_WAIT                            " NOP\n\t"
