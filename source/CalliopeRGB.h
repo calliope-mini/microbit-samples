@@ -32,7 +32,7 @@ DEALINGS IN THE SOFTWARE.
 #include "MicroBitComponent.h"
 
 //Pin of RGB LED on the MicroBit
-#define CALLIOPE_PIN_RGB                    P0_18
+#define CALLIOPE_PIN_RGB                    P0_0
 
 //assembler code: do nothing
 #define RGB_WAIT                            " NOP\n\t"
@@ -45,7 +45,7 @@ DEALINGS IN THE SOFTWARE.
 #define RGB_KEEP_VALUE                      -1
 
 //max light intensity
-#define RGB_LED_MAX_INTENSITY               50
+#define RGB_LED_MAX_INTENSITY               0xff
 
 //the following defines are timed specifically to the sending algorithm in CalliopeRGB.cpp
 //timings for sending to the RGB LED: 
