@@ -3,17 +3,18 @@
 
 MicroBit uBit;
 CalliopeRGB                 rgb;
+MicroBitDisplay display;
 
 int main() {
     uBit.init();
 
+    display.scroll("RED");
     rgb.Set_Color(0xff, 0x00, 0x00, 0);
-    uBit.sleep(1000);
+    display.scroll("GREEN");
     rgb.Set_Color(0x00, 0xff, 0x00, 0);
-    uBit.sleep(1000);
+    display.scroll("BLUE");
     rgb.Set_Color(0x00, 0x00, 0xff, 0);
-    uBit.sleep(1000);
+    display.scroll("OFF");
     rgb.Set_Color(0xff, 0xff, 0xff, 0);
-
 } 
 
