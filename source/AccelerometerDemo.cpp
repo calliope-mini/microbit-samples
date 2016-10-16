@@ -23,6 +23,7 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 */
 
+#define MICROBIT_DBG 1
 #include "MicroBit.h"
 #include "MicroBitSamples.h"
 
@@ -30,6 +31,14 @@ DEALINGS IN THE SOFTWARE.
 
 MicroBit uBit;
 //MicroBitSerial serial(USBTX, USBRX);
+
+MicroBitImage OUTPUT_ON("\
+        0 1 1 1 0\n\
+        1 1 1 1 1\n\
+        1 1 1 1 1\n\
+        1 1 1 1 1\n\
+        0 1 1 1 0\n");
+
 
 //
 // Scales the given value that is in the -1024 to 1024 range
@@ -51,6 +60,14 @@ int pixel_from_g(int value)
     return x;
 }
 
+int shaken = 0;
+
+void onShake(MicroBitEvent) {
+	uBit.display.print(OUTPUT_ON);
+        shaken = 1;
+}
+
+
 int main()
 {
     // Initialise the micro:bit runtime.
@@ -64,8 +81,14 @@ int main()
 //     serial.baud(115200);
 //     serial.send("hi joerg\n\r");
 
+    uBit.messageBus.listen(MICROBIT_ID_GESTURE, MICROBIT_ACCELEROMETER_EVT_SHAKE, onShake);
+
     while(1)
     {
+	if (shaken) {
+		uBit.sleep(1000);
+		shaken=0;
+	}
 	    int rx = uBit.accelerometer.getX();
 	    int ry = uBit.accelerometer.getY();
 	    int x = pixel_from_g(uBit.accelerometer.getX());
