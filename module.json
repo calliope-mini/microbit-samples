@@ -4,7 +4,7 @@
   "description": "The micro:bit runtime common abstraction with examples.",
   "license": "MIT",
   "dependencies": {
-    "microbit": "calliope-mini/microbit"
+    "microbit": "calliope-mini/microbit#v2.0.0-rc7-calliope-p6"
   },
   "targetDependencies": {},
   "bin": "./source"
