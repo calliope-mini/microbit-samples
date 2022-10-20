@@ -2,9 +2,33 @@
 
 A collection of example programs using the micro:bit runtime.
 
-The source folder contains a selection of samples demonstrating the capabilities and usage of the runtime APIs.
-To select a sample, edit the `MicroBitSamples.h` file in the source folder and uncomment the line matching the
-sample you wish to use. Please be sure to note that only one sample is selected at a time.
+The source/examples folder contains a selection of samples demonstrating the capabilities and usage of the runtime APIs.
+To select a sample, simply copy the .cpp files from the relevant folder into the source/ folder.
+
+e.g. to select the "invaders" example:
+
+```
+cp source/examples/invaders/* source
+```
+
+and then to compile your sample:
+
+```
+yt clean
+yt build
+```
+
+The HEX file for you micro:bit with then be generated and stored in build\bbc-microbit-classic-gcc\source\microbit-samples-combined.hex
+
+n.b. Any samples using the low level RADIO APIs (such as simple-radio-rx and simple-radio-tx) require the bluetooth capabilities of the
+micro:bit to be disabled. To do this, simply copy the config.json file from the sample to the top level of your project. Don't forget to
+remove this file again later if you then want to use Bluetooth! For example:
+
+
+```
+cp source/examples/simple-radio-rx/config.json .
+```
+
 
 ## Overview
 
@@ -25,7 +49,7 @@ In addition to supporting development in C/C++, the runtime is also designed spe
 
 ##  microbit-dal Configuration
 
-To configure the DAL a number options can be modified in `MicroBitConfig.h`, a full list and explanation
+The DAL also contains a number of compile time options can be modified. A full list and explanation
 can be found in our [documentation](http://lancaster-university.github.io/microbit-docs/advanced/#compile-time-options-with-microbitconfigh).
 
 Alternately, `yotta` can be used to configure the dal regardless of module/folder structure, through providing a
@@ -72,6 +96,17 @@ Here is an example of `config.json` with all available options configured:
     }
 }
 ```
+##  Debug on Visual Studio Code (Windows)
+
+1. build sample. You can build "HELLO WORLD! :)" program.
+2. Copy microbit-samples\build\bbc-microbit-classic-gcc\source\microbit-samples-combined.hex to micro:bit.
+3. Launch the Visual Studio Code
+4. File -> Open Folder... and select "microbit-samples" folder.
+5. Set break point to "main()" function.
+6. View -> Debug (Ctrl + Shift + D)
+7. Debug -> Start Debugging (F5)
+
+![Debug on Visual Studio Code](/debugOnVisualStudioCode.gif)
 
 ## BBC Community Guidelines
 
