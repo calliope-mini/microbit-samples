@@ -151,6 +151,26 @@ void testRGB()
     uBit.rgb.off();
 }
 
+void testAnalogPins()
+{
+
+    // P4/P5/P6 are the LED matrix columns (LEDCOL1-3). The display refresh ISR
+    // drives them continuously, so getAnalogValue() faults when it tries to
+    // switch them into analog-input mode. Disable the display first.
+    MicroBitPin* analogpins[]  = { &uBit.io.P1, &uBit.io.P2, &uBit.io.P4,
+                             &uBit.io.P5, &uBit.io.P6, &uBit.io.P16, &uBit.io.P17 };
+    const int    labels[] = { 1, 2, 4, 5, 6, 16, 17 };
+
+    uBit.display.disable();
+
+    for (int i = 0; i < (int)(sizeof(analogpins) / sizeof(analogpins[0])); i++)
+    {
+        uBit.serial.send(ManagedString(labels[i]) + ": "
+                         + ManagedString(analogpins[i]->getAnalogValue()) + "\r\n");
+    }
+    uBit.display.disable();
+}
+
 void testButtons()
 {
     // Wait for button A or B press and scroll which one was pressed
@@ -180,11 +200,11 @@ int main()
 {
     // Initialise the micro:bit runtime.
     uBit.init();
+    uBit.serial.send("Calliope Mini Hardware Test\r\n");
+
     testRGB();
     testSpeaker();
     testMotor();
-    
-
     
     while(1)
 
@@ -201,11 +221,12 @@ int main()
         // Button Test
         // testButtons();
     
+        // Analog Read Test
+        testAnalogPins();
         
         // Accelerometer Test
         // Periodically read the accelerometer x and y values, and plot a 
         // scaled version of this ont the display. 
-    
         int x = pixel_from_g(uBit.accelerometer.getX());
         int y = pixel_from_g(uBit.accelerometer.getY());
         uBit.display.image.clear();
