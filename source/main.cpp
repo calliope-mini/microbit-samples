@@ -171,6 +171,59 @@ void testAnalogPins()
     uBit.display.disable();
 }
 
+// Continuously grows the heap (fixed-size block allocations) until malloc()
+// fails, then frees everything back down and repeats, printing progress each
+// step. Meant to be called once per main-loop iteration (not itself a loop).
+//
+// microbit_heap_size(i) only reports each heap region's configured capacity,
+// not live free/used bytes (see docs/claude-ram-detection-ble-gating.md), so
+// this tracks bytes it has allocated itself as the "live usage" signal, and
+// reports the real malloc() failure as the actual OOM signal.
+void testHeapStress()
+{
+    static const int BLOCK_SIZE = 256;
+    static const int MAX_BLOCKS = 80; // >= 16KB (largest single heap region) / BLOCK_SIZE
+    static void*     blocks[MAX_BLOCKS];
+    static int       count = 0;
+    static bool      growing = true;
+
+    if (growing)
+    {
+        void* p = (count < MAX_BLOCKS) ? malloc(BLOCK_SIZE) : NULL;
+        if (p != NULL)
+        {
+            blocks[count++] = p;
+        }
+        else
+        {
+            growing = false;
+            uBit.serial.send("[heap-stress] OUT OF MEMORY - freeing...\r\n");
+        }
+    }
+    else
+    {
+        if (count > 0)
+        {
+            free(blocks[--count]);
+        }
+        else
+        {
+            growing = true;
+            uBit.serial.send("[heap-stress] fully freed - growing again...\r\n");
+        }
+    }
+
+    uint32_t heap0 = microbit_heap_size(0);
+    uint32_t heap1 = microbit_heap_size(1);
+    uint32_t heap2 = microbit_heap_size(2);
+
+    uBit.serial.printf("[heap-stress] %s held=%d blocks (%lu bytes) | heap capacity: h0=%lu h1=%lu h2=%lu total=%lu\r\n",
+                        growing ? "GROW  " : "SHRINK",
+                        count, (unsigned long)(count * BLOCK_SIZE),
+                        (unsigned long)heap0, (unsigned long)heap1, (unsigned long)heap2,
+                        (unsigned long)(heap0 + heap1 + heap2));
+}
+
 void testButtons()
 {
     // Wait for button A or B press and scroll which one was pressed
@@ -180,20 +233,105 @@ void testButtons()
         uBit.display.scroll("B");
 }
 
+void onButtonEvent(MicroBitEvent e)
+{
+    if (e.source == MICROBIT_ID_BUTTON_A)
+        uBit.serial.send("BUTTON A: ");
+    else if (e.source == MICROBIT_ID_BUTTON_B)
+        uBit.serial.send("BUTTON B: ");
+    else if (e.source == MICROBIT_ID_BUTTON_AB)
+        uBit.serial.send("BUTTON A+B: ");
+    else if (e.source == MICROBIT_ID_IO_P0)
+        uBit.serial.send("TOUCH P0: ");
+    else if (e.source == MICROBIT_ID_IO_P1)
+        uBit.serial.send("TOUCH P1: ");
+    else if (e.source == MICROBIT_ID_IO_P2)
+        uBit.serial.send("TOUCH P2: ");
+    else if (e.source == MICROBIT_ID_IO_P3)
+        uBit.serial.send("TOUCH P3: ");
+
+    if (e.value == MICROBIT_BUTTON_EVT_DOWN)
+        uBit.serial.send("DOWN\r\n");
+    else if (e.value == MICROBIT_BUTTON_EVT_UP)
+        uBit.serial.send("UP\r\n");
+    else if (e.value == MICROBIT_BUTTON_EVT_CLICK)
+        uBit.serial.send("CLICK\r\n");
+    else if (e.value == MICROBIT_BUTTON_EVT_LONG_CLICK)
+        uBit.serial.send("LONG_CLICK\r\n");
+    else if (e.value == MICROBIT_BUTTON_EVT_HOLD)
+        uBit.serial.send("HOLD\r\n");
+    else if (e.value == MICROBIT_BUTTON_EVT_DOUBLE_CLICK)
+        uBit.serial.send("DOUBLE_CLICK\r\n");
+}
+
+// Register handlers for button A/B/A+B clicks and P0-P3 touch events.
+void registerButtonHandlers()
+{
+    uBit.messageBus.listen(MICROBIT_ID_BUTTON_A, MICROBIT_EVT_ANY, onButtonEvent);
+    uBit.messageBus.listen(MICROBIT_ID_BUTTON_B, MICROBIT_EVT_ANY, onButtonEvent);
+    uBit.messageBus.listen(MICROBIT_ID_BUTTON_AB, MICROBIT_EVT_ANY, onButtonEvent);
+
+    uBit.messageBus.listen(MICROBIT_ID_IO_P0, MICROBIT_EVT_ANY, onButtonEvent);
+    uBit.messageBus.listen(MICROBIT_ID_IO_P1, MICROBIT_EVT_ANY, onButtonEvent);
+    uBit.messageBus.listen(MICROBIT_ID_IO_P2, MICROBIT_EVT_ANY, onButtonEvent);
+    uBit.messageBus.listen(MICROBIT_ID_IO_P3, MICROBIT_EVT_ANY, onButtonEvent);
+
+    // Pins only raise touch events once they've been put into touch-sense mode.
+    uBit.io.P0.isTouched();
+    uBit.io.P1.isTouched();
+    uBit.io.P2.isTouched();
+    uBit.io.P3.isTouched();
+}
+
+void onGestureEvent(MicroBitEvent e)
+{
+    switch (e.value)
+    {
+        case MICROBIT_ACCELEROMETER_EVT_TILT_UP:    uBit.serial.send("GESTURE: TILT_UP\r\n"); break;
+        case MICROBIT_ACCELEROMETER_EVT_TILT_DOWN:  uBit.serial.send("GESTURE: TILT_DOWN\r\n"); break;
+        case MICROBIT_ACCELEROMETER_EVT_TILT_LEFT:  uBit.serial.send("GESTURE: TILT_LEFT\r\n"); break;
+        case MICROBIT_ACCELEROMETER_EVT_TILT_RIGHT: uBit.serial.send("GESTURE: TILT_RIGHT\r\n"); break;
+        case MICROBIT_ACCELEROMETER_EVT_FACE_UP:    uBit.serial.send("GESTURE: FACE_UP\r\n"); break;
+        case MICROBIT_ACCELEROMETER_EVT_FACE_DOWN:  uBit.serial.send("GESTURE: FACE_DOWN\r\n"); break;
+        case MICROBIT_ACCELEROMETER_EVT_FREEFALL:   uBit.serial.send("GESTURE: FREEFALL\r\n"); break;
+        case MICROBIT_ACCELEROMETER_EVT_3G:         uBit.serial.send("GESTURE: 3G\r\n"); break;
+        case MICROBIT_ACCELEROMETER_EVT_6G:         uBit.serial.send("GESTURE: 6G\r\n"); break;
+        case MICROBIT_ACCELEROMETER_EVT_8G:         uBit.serial.send("GESTURE: 8G\r\n"); break;
+        case MICROBIT_ACCELEROMETER_EVT_SHAKE:      uBit.serial.send("GESTURE: SHAKE\r\n"); break;
+        default: break;
+    }
+}
+
+// Register a handler for accelerometer gesture events (tilt, face up/down, freefall, shake, 3g/6g/8g).
+void registerGestureHandlers()
+{
+    uBit.messageBus.listen(MICROBIT_ID_GESTURE, MICROBIT_EVT_ANY, onGestureEvent);
+}
 int pixel_from_g(int value)
 {
     int x = 0;
-
+    
     if (value > -750)
-        x++;
+    x++;
     if (value > -250)
-        x++;
+    x++;
     if (value > 250)
-        x++;
+    x++;
     if (value > 750)
-        x++;
-
+    x++;
+    
     return x;
+}
+
+void testAccelerometer()
+{
+    // Periodically read the accelerometer x and y values, and plot a
+    // scaled version of this ont the display. Call in while loop
+    int x = pixel_from_g(uBit.accelerometer.getX());
+    int y = pixel_from_g(uBit.accelerometer.getY());
+    uBit.display.image.clear();
+    uBit.display.image.setPixelValue(x, y, 255);
+
 }
 
 int main()
@@ -201,6 +339,9 @@ int main()
     // Initialise the micro:bit runtime.
     uBit.init();
     uBit.serial.send("Calliope Mini Hardware Test\r\n");
+
+    registerButtonHandlers();
+    registerGestureHandlers();
 
     testRGB();
     testSpeaker();
@@ -222,15 +363,14 @@ int main()
         // testButtons();
     
         // Analog Read Test
-        testAnalogPins();
-        
+        // testAnalogPins();
+
+        // Heap Stress Test
+        // testHeapStress();
+
         // Accelerometer Test
-        // Periodically read the accelerometer x and y values, and plot a 
-        // scaled version of this ont the display. 
-        int x = pixel_from_g(uBit.accelerometer.getX());
-        int y = pixel_from_g(uBit.accelerometer.getY());
-        uBit.display.image.clear();
-        uBit.display.image.setPixelValue(x, y, 255);
+        // testAccelerometer();
+
         uBit.sleep(100);
     }
 }
