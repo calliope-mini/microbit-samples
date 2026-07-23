@@ -1,5 +1,6 @@
 {
     "microbit-dal": {
+        "simulate_mini1_on_mini2": 1,
         "bluetooth": {
             "enabled": 1,
             "whitelist": 0,
@@ -8,8 +9,10 @@
             "dfu_service": 1,
             "event_service": 0,
             "device_info_service": 1,
-            "security_level": "SECURITY_MODE_ENCRYPTION_OPEN_LINK",
-            "force_enabled_dal_16kb": 1
+            "force_enabled_dal_16kb": 1,
+            "security_level": "SECURITY_MODE_ENCRYPTION_OPEN_LINK"
+            
+            
         }
     }
 }

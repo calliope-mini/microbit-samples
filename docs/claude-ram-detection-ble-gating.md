@@ -221,3 +221,110 @@
     when the panic hit, even though the port is hosted by the DAPLink interface chip,
     which a target panic shouldn't affect. If it recurs outside panic scenarios, check
     `dmesg` for kernel-level USB disconnects vs. the serial monitor just giving up.
+
+- 2026-07-23: Renamed the v1-simulation compile flag from `MICROBIT_KEEP_V1_HEAP_ON_32KB`
+  to `MICROBIT_SIMULATE_MINI1_ON_MINI2` (yotta config key `microbit-dal.
+  keep_v1_heap_on_32kb` -> `microbit-dal.simulate_mini1_on_mini2`, mapped in
+  `yotta_cfg_mappings.h`). The new flag now controls TWO things when set to 1, decoupled
+  from each other in `MicroBit::init()` (`MicroBit.cpp`):
+  1. skips the v2 extra-16KB heap reclaim block (RAMONB power-up + third
+     `microbit_create_heap`) - guarded by `#if !CONFIG_ENABLED(...)` around ONLY that block;
+  2. drops the runtime `microbit_ram_size() > 16*1024` gate on BLE bring-up (a nested
+     `#if !CONFIG_ENABLED(...)` around just the gate *condition*), so BLE is NOT
+     deactivated by the simulated 16KB size - it starts unconditionally (still subject to
+     `MICROBIT_BLE_ENABLED`). This is deliberate: simulate mode runs on physical v2
+     silicon (32KB), which can host BLE fine; we only want the *heap* to look like v1.
+  - Two bugs caught during review of the initial rename and since fixed:
+    (a) name mismatch - the mapping defined `MICROBIT_SIMULATE_MINI1_ON_MINI2` but
+    `MicroBit.cpp` tested `MICROBIT_DAL_SIMULATE_MINI1_ON_MINI2` (stray `DAL_`); since
+    `CONFIG_ENABLED(X)` is `(X == 1)` and an undefined macro reads as 0 in `#if`, the flag
+    was a silent no-op. (b) the `#endif` had been placed after `init()`'s closing `}`, so
+    enabling the flag would have deleted the function's brace (build break) AND compiled
+    out the whole BLE block (deactivating BLE - opposite of intent). Fixed by matching the
+    name and moving the guard to wrap only the heap block / only the BLE gate condition.
+  - Default now lives at `MicroBitConfig.h` as `#ifndef MICROBIT_SIMULATE_MINI1_ON_MINI2
+    / #define ... 0` (was the old `KEEP_V1` default). Works because `yotta_cfg_mappings.h`
+    is included at `MicroBitConfig.h:34`, before the `#ifndef` at ~141, so a set config
+    value wins and an unset one falls back to 0. No references to the old
+    `KEEP_V1_HEAP_ON_32KB` name remain anywhere in the tree.
+  - NOT yet rebuilt/re-flashed after this rename - run `yt build` (YOTTAENV venv) with
+    `simulate_mini1_on_mini2` both 0 and 1 to confirm both configs compile before trusting.
+
+- 2026-07-23: Made the Soft Device RAM reclaim RUNTIME-aware so a BLE-gated-off boot
+  actually gets that RAM back as heap (goal: maximize free heap at runtime, not just
+  simulate v1's ceiling). Previously the reclaim in `MicroBit::init()` (`MicroBit.cpp`)
+  was compile-time gated on `MICROBIT_BLE_ENABLED`: BLE-in reclaimed only the ~1KB slack
+  above the GATT table (`[SD_GATT_TABLE_START+SIZE, SD_LIMIT)`), BLE-out reclaimed the
+  whole ~8KB region (`[SRAM_BASE, SD_LIMIT)`). So a build with `bluetooth.enabled:1` that
+  then skipped BLE at runtime (simulate v1 / 16KB gate) left ~7KB of SoftDevice-reserved
+  RAM unused (S110 numbers: 8184 vs 1024 bytes, delta 7160).
+  - Fix: compute one `bool bleWillRun` before the heap-reuse section =
+    `(ble != NULL) || ((ram>16KB && !SIMULATE_MINI1_ON_MINI2) || BLE_FORCE_ENABLE_16KB)`,
+    and use it for BOTH the reclaim bounds (`bleWillRun` -> 1KB, else -> 8KB) and the BLE
+    start gate (`if (bleWillRun && !ble)`). No new heap region / no `MAXIMUM_HEAPS` bump -
+    it only changes the bounds of the existing heap-1 `create_heap` call.
+  - Why it's safe re: SoftDevice. The SoftDevice only claims its RAM while enabled
+    (`ble->init()` inside `bleManager.init()`); when never enabled it never touches that
+    region, so it's free heap. The one exception is pairing/DFU mode, which DOES bring up
+    the SoftDevice - but that block runs EARLIER in `init()` (before the reclaim) and sets
+    `ble`, and per the user it is only ever entered via A+B+reset at startup (no runtime
+    re-entry without a reset, and reset re-runs init() top-down). So `ble != NULL` at the
+    reclaim point reliably means "SoftDevice is up this boot" -> take the 1KB branch. The
+    only unguardable hazard is user code calling `bleManager.init()` manually mid-session
+    on a gated-off boot; documented in the code comment as the contract.
+  - Side effect (intended, beneficial): a REAL mini v1 (16KB) with BLE compiled in but
+    gated off now also reclaims the full ~8KB instead of 1KB - same safety argument. Not
+    just the simulation path.
+  - `BLE_FORCE_ENABLE_16KB` handled: it makes `bleWillRun` true, so a forced-on 16KB/v1
+    build correctly reserves the SD region (1KB reclaim) AND starts BLE.
+  - Case matrix verified by hand (start BLE / reclaim size): v1 no-force = off/8KB;
+    v2 normal = on/1KB; v2 simulate = off/8KB; any force = on/1KB; pairing (ble!=NULL) =
+    already-on/1KB. All consistent.
+  - NOT yet built or flashed. MUST verify on real hardware before trusting: this hands the
+    SoftDevice's low-RAM region to the allocator, so a heap-stress run (see heap notes)
+    should now show a much larger heap-1, and a separate boot into pairing mode (A+B+reset)
+    must still pair/DFU cleanly (confirms the 1KB branch is taken and SD RAM intact there).
+
+- 2026-07-23 (corrects the 2026-07-15 name-mismatch note above): the correct/kept symbol
+  is `device_heap_size(uint8_t heap_index)`, NOT `microbit_heap_size`. It is declared in
+  `MicroBitHeapAllocator.h` and defined in `.cpp` under that name, and (per the user) is
+  the name codal uses too - so it is intentional, not a stale mismatch. The earlier note's
+  "fix" (renaming the definition to `microbit_heap_size`) is superseded: use
+  `device_heap_size`. It returns each region's CONFIGURED capacity (`heap_end -
+  heap_start`), 0 for indices >= heap_count, not live free bytes.
+- 2026-07-23: Added heap/fiber diagnostics to `source/main.cpp` (re-adding capability the
+  earlier heap-stress work had left only as a commented `// testHeapStress();`):
+  - `int countOpenFibers()` - walks `get_fiber_list()` via `->next` with IRQs masked
+    (saves/restores PRIMASK, not blind enable), capped at 256 as a corrupt-list guard.
+  - `uint32_t largestFreeBlock()` - binary-searches `malloc()` sizes (0..64KB) and frees
+    immediately; reports the largest *contiguous* allocatable block (best heap), NOT total
+    free. Chosen because `device_heap_size()` is capacity-only and there is no live
+    total-free accessor without `MICROBIT_DBG` (which disables `uBit.serial`).
+  - `void readHeap()` - one serial line: `HEAP ram=.. h0=.. h1=.. h2=.. largestFree=..
+    fibers=..`. Per-heap values are configured capacities, so h1 is the direct readout for
+    verifying the Soft Device reclaim (expect ~8KB on a BLE-gated-off boot, ~1KB when BLE
+    runs). Wired into the main loop at ~1Hz (diagTick % 10, loop already sleeps 100ms).
+  - Not yet built/flashed.
+
+- 2026-07-23 (on-device, corrects the largestFreeBlock() entry above): flashed with
+  simulate_mini1_on_mini2=1. Reclaim confirmed working - serial showed
+  `HEAP ram=32768 h0=3760 h1=8184 h2=0` (h1 = full ~8KB Soft Device reclaim, h2=0 as
+  expected in simulate mode). BUT the board then panicked with error 020 (MICROBIT_OOM)
+  mid-line, right after `h2=0` and before `largestFree=`/`fibers=` printed.
+  - Root cause: `largestFreeBlock()`'s malloc binary-search. `MICROBIT_PANIC_HEAP_FULL`
+    defaults to 1 (`MicroBitConfig.h:505-506`), so `microbit_malloc` calls
+    `microbit_panic(MICROBIT_OOM)` on ANY failed allocation
+    (`MicroBitHeapAllocator.cpp:318-320`) - it does not just return NULL. The probe's
+    whole method is to malloc sizes that fail (starts at 32KB vs a ~12KB heap), so the
+    first oversized malloc panicked. The args-before-call evaluation order is why the
+    line cut off exactly at `h2=0` (the probe ran as a printf argument).
+  - Fix (main.cpp only, DAL untouched): replaced the probe with `heapFreeBytes()`, which
+    walks each heap's block metadata directly (`extern HeapDefinition heap[]` + the
+    MICROBIT_HEAP_BLOCK_FREE header scheme, mirroring microbit_heap_print) and only READS
+    - no allocation, so it can't trip the panic. Reports true total free (matches the
+    DAL's mb_total_free). readHeap() now prints `free=` instead of `largestFree=`.
+  - Lesson: on this build you cannot probe free memory with malloc - a failing malloc is
+    fatal (panic 020), not a NULL return. Any heap introspection must be read-only.
+  - Still to watch: the crash pre-empted the fiber-count print, so whether there is also a
+    genuine fiber-explosion OOM (see claude-makecode-port.md) from the gesture/button
+    handlers is not yet ruled out - re-observe now that readHeap() is non-fatal.

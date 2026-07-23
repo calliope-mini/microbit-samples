@@ -24,8 +24,89 @@ DEALINGS IN THE SOFTWARE.
 */
 
 #include "MicroBit.h"
+#include "MicroBitHeapAllocator.h"   // device_heap_size(), MICROBIT_MAXIMUM_HEAPS, MICROBIT_HEAP_BLOCK_SIZE
+#include "MicroBitFiber.h"           // get_fiber_list(), Fiber
 
 MicroBit uBit;
+
+/*
+ * Diagnostics: read the heap layout / free space and the live fiber count.
+ * Useful for verifying the runtime Soft Device heap reclaim (heap 1 grows from
+ * ~1KB to ~8KB on a BLE-gated-off boot) and for watching fibers pile up during
+ * blocking display ops. All output goes to uBit.serial.
+ */
+
+// Number of fibers currently on the scheduler's global list (main + idle +
+// any forked/blocked handler fibers). Walked with interrupts masked, since the
+// scheduler can splice this list from interrupt context. PRIMASK is saved and
+// restored rather than blindly re-enabled, so this is safe to call even from an
+// already-critical section. The count is capped as a defensive guard against a
+// corrupted (e.g. circular) list.
+int countOpenFibers()
+{
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+
+    int count = 0;
+    for (Fiber *f = get_fiber_list(); f != NULL && count < 256; f = f->next)
+        count++;
+
+    __set_PRIMASK(primask);
+    return count;
+}
+
+// The allocator's internal heap table (defined in MicroBitHeapAllocator.cpp).
+// Not exposed in the header, but HeapDefinition is public and the symbol has
+// external linkage, so we can read it to walk block metadata directly. Unused
+// slots have heap_start == NULL.
+extern HeapDefinition heap[MICROBIT_MAXIMUM_HEAPS];
+
+// Total free bytes across all heaps, computed by walking each heap's block list
+// - the same scheme microbit_heap_print() uses: each block starts with a header
+// word whose MICROBIT_HEAP_BLOCK_FREE bit flags a free run and whose low bits
+// are the run length in blocks (header included). This is READ-ONLY: unlike a
+// malloc() probe it never fails an allocation, so it can't trip the allocator's
+// MICROBIT_PANIC_HEAP_FULL path (that panic, code 020, is why probing crashed).
+// The figure matches the DAL's own mb_total_free (counts free block headers too).
+uint32_t heapFreeBytes()
+{
+    uint32_t freeBlocks = 0;
+
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+
+    for (uint8_t i = 0; i < MICROBIT_MAXIMUM_HEAPS; i++)
+    {
+        uint32_t *block = heap[i].heap_start;
+        uint32_t *end   = heap[i].heap_end;
+        if (block == NULL)
+            continue;
+
+        while (block < end)
+        {
+            uint32_t blockSize = *block & ~MICROBIT_HEAP_BLOCK_FREE;
+            if (blockSize == 0)     // corrupt/empty header - stop rather than spin forever
+                break;
+            if (*block & MICROBIT_HEAP_BLOCK_FREE)
+                freeBlocks += blockSize;
+            block += blockSize;
+        }
+    }
+
+    __set_PRIMASK(primask);
+    return freeBlocks * MICROBIT_HEAP_BLOCK_SIZE;
+}
+
+// One-line heap + fiber snapshot over serial. Per-heap sizes are the configured
+// region capacities (0 for unused slots), so h1 reflects the Soft Device reclaim.
+void readHeap()
+{
+    uBit.serial.printf("HEAP ram=%d", (int)microbit_ram_size());
+    for (uint8_t i = 0; i < MICROBIT_MAXIMUM_HEAPS; i++)
+        uBit.serial.printf(" h%d=%d", (int)i, (int)device_heap_size(i));
+    uBit.serial.printf(" free=%d fibers=%d\r\n",
+                       (int)heapFreeBytes(), countOpenFibers());
+}
 
 void testTouchPins()
 {
@@ -171,58 +252,6 @@ void testAnalogPins()
     uBit.display.disable();
 }
 
-// Continuously grows the heap (fixed-size block allocations) until malloc()
-// fails, then frees everything back down and repeats, printing progress each
-// step. Meant to be called once per main-loop iteration (not itself a loop).
-//
-// microbit_heap_size(i) only reports each heap region's configured capacity,
-// not live free/used bytes (see docs/claude-ram-detection-ble-gating.md), so
-// this tracks bytes it has allocated itself as the "live usage" signal, and
-// reports the real malloc() failure as the actual OOM signal.
-void testHeapStress()
-{
-    static const int BLOCK_SIZE = 256;
-    static const int MAX_BLOCKS = 80; // >= 16KB (largest single heap region) / BLOCK_SIZE
-    static void*     blocks[MAX_BLOCKS];
-    static int       count = 0;
-    static bool      growing = true;
-
-    if (growing)
-    {
-        void* p = (count < MAX_BLOCKS) ? malloc(BLOCK_SIZE) : NULL;
-        if (p != NULL)
-        {
-            blocks[count++] = p;
-        }
-        else
-        {
-            growing = false;
-            uBit.serial.send("[heap-stress] OUT OF MEMORY - freeing...\r\n");
-        }
-    }
-    else
-    {
-        if (count > 0)
-        {
-            free(blocks[--count]);
-        }
-        else
-        {
-            growing = true;
-            uBit.serial.send("[heap-stress] fully freed - growing again...\r\n");
-        }
-    }
-
-    uint32_t heap0 = microbit_heap_size(0);
-    uint32_t heap1 = microbit_heap_size(1);
-    uint32_t heap2 = microbit_heap_size(2);
-
-    uBit.serial.printf("[heap-stress] %s held=%d blocks (%lu bytes) | heap capacity: h0=%lu h1=%lu h2=%lu total=%lu\r\n",
-                        growing ? "GROW  " : "SHRINK",
-                        count, (unsigned long)(count * BLOCK_SIZE),
-                        (unsigned long)heap0, (unsigned long)heap1, (unsigned long)heap2,
-                        (unsigned long)(heap0 + heap1 + heap2));
-}
 
 void testButtons()
 {
@@ -233,48 +262,49 @@ void testButtons()
         uBit.display.scroll("B");
 }
 
-void onButtonEvent(MicroBitEvent e)
+static void onTouchP0(MicroBitEvent)
 {
-    if (e.source == MICROBIT_ID_BUTTON_A)
-        uBit.serial.send("BUTTON A: ");
-    else if (e.source == MICROBIT_ID_BUTTON_B)
-        uBit.serial.send("BUTTON B: ");
-    else if (e.source == MICROBIT_ID_BUTTON_AB)
-        uBit.serial.send("BUTTON A+B: ");
-    else if (e.source == MICROBIT_ID_IO_P0)
-        uBit.serial.send("TOUCH P0: ");
-    else if (e.source == MICROBIT_ID_IO_P1)
-        uBit.serial.send("TOUCH P1: ");
-    else if (e.source == MICROBIT_ID_IO_P2)
-        uBit.serial.send("TOUCH P2: ");
-    else if (e.source == MICROBIT_ID_IO_P3)
-        uBit.serial.send("TOUCH P3: ");
+    uBit.display.scroll("0");    
+}
+static void onTouchP1(MicroBitEvent)
+{
+    uBit.display.scroll("1");
+}
+static void onTouchP2(MicroBitEvent)
+{
+    uBit.display.scroll("2");
+}
+static void onTouchP3(MicroBitEvent)
+{
+   uBit.display.scroll("3");
+}
 
-    if (e.value == MICROBIT_BUTTON_EVT_DOWN)
-        uBit.serial.send("DOWN\r\n");
-    else if (e.value == MICROBIT_BUTTON_EVT_UP)
-        uBit.serial.send("UP\r\n");
-    else if (e.value == MICROBIT_BUTTON_EVT_CLICK)
-        uBit.serial.send("CLICK\r\n");
-    else if (e.value == MICROBIT_BUTTON_EVT_LONG_CLICK)
-        uBit.serial.send("LONG_CLICK\r\n");
-    else if (e.value == MICROBIT_BUTTON_EVT_HOLD)
-        uBit.serial.send("HOLD\r\n");
-    else if (e.value == MICROBIT_BUTTON_EVT_DOUBLE_CLICK)
-        uBit.serial.send("DOUBLE_CLICK\r\n");
+static void onButtonA(MicroBitEvent)
+{
+   uBit.display.scroll("A");
+}
+static void onButtonB(MicroBitEvent)
+{
+   uBit.display.scroll("B");
+}
+static void onButtonAB(MicroBitEvent)
+{
+   uBit.display.scroll("AB");
 }
 
 // Register handlers for button A/B/A+B clicks and P0-P3 touch events.
 void registerButtonHandlers()
 {
-    uBit.messageBus.listen(MICROBIT_ID_BUTTON_A, MICROBIT_EVT_ANY, onButtonEvent);
-    uBit.messageBus.listen(MICROBIT_ID_BUTTON_B, MICROBIT_EVT_ANY, onButtonEvent);
-    uBit.messageBus.listen(MICROBIT_ID_BUTTON_AB, MICROBIT_EVT_ANY, onButtonEvent);
+    // Listen for CLICK only. A single press emits DOWN, UP and CLICK, so
+    // MICROBIT_EVT_ANY would fire the handler three times per press.
+    uBit.messageBus.listen(MICROBIT_ID_BUTTON_A, MICROBIT_BUTTON_EVT_CLICK, onButtonA);
+    uBit.messageBus.listen(MICROBIT_ID_BUTTON_B, MICROBIT_BUTTON_EVT_CLICK, onButtonB);
+    uBit.messageBus.listen(MICROBIT_ID_BUTTON_AB, MICROBIT_BUTTON_EVT_CLICK, onButtonAB);
 
-    uBit.messageBus.listen(MICROBIT_ID_IO_P0, MICROBIT_EVT_ANY, onButtonEvent);
-    uBit.messageBus.listen(MICROBIT_ID_IO_P1, MICROBIT_EVT_ANY, onButtonEvent);
-    uBit.messageBus.listen(MICROBIT_ID_IO_P2, MICROBIT_EVT_ANY, onButtonEvent);
-    uBit.messageBus.listen(MICROBIT_ID_IO_P3, MICROBIT_EVT_ANY, onButtonEvent);
+    uBit.messageBus.listen(MICROBIT_ID_IO_P0, MICROBIT_BUTTON_EVT_CLICK, onTouchP0);
+    uBit.messageBus.listen(MICROBIT_ID_IO_P1, MICROBIT_BUTTON_EVT_CLICK, onTouchP1);
+    uBit.messageBus.listen(MICROBIT_ID_IO_P2, MICROBIT_BUTTON_EVT_CLICK, onTouchP2);
+    uBit.messageBus.listen(MICROBIT_ID_IO_P3, MICROBIT_BUTTON_EVT_CLICK, onTouchP3);
 
     // Pins only raise touch events once they've been put into touch-sense mode.
     uBit.io.P0.isTouched();
@@ -346,6 +376,7 @@ int main()
     testRGB();
     testSpeaker();
     testMotor();
+    readHeap();
     
     while(1)
 
@@ -370,6 +401,14 @@ int main()
 
         // Accelerometer Test
         // testAccelerometer();
+
+        // Heap / fiber diagnostics (~1 Hz: 10 x 100ms sleep below)
+        static int diagTick = 0;
+        if (++diagTick >= 10)
+        {
+            diagTick = 0;
+            readHeap();
+        }
 
         uBit.sleep(100);
     }
