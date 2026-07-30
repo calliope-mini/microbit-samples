@@ -306,6 +306,34 @@
     runs). Wired into the main loop at ~1Hz (diagTick % 10, loop already sleeps 100ms).
   - Not yet built/flashed.
 
+- 2026-07-30: Renamed the yotta config key from `microbit-dal.bluetooth.force_enabled_dal_16kb`
+  to `microbit-dal.bluetooth.force_enabled_16kb` (supersedes the 2026-07-15 entry above, which
+  introduced the `_dal_` spelling). This completes the earlier partial rename: DAL commit
+  `f27b5af` ("uniformly name force enable 16kb flag") had already renamed the C macro
+  `MICROBIT_BLE_FORCE_ENABLE_16KB` -> `MICROBIT_BLE_FORCE_ENABLED_16KB` but left the
+  *config key* — and therefore the
+  `YOTTA_CFG_...` symbol — with the redundant `DAL_` infix.
+  - `_dal_` was redundant twice over: the config block is already `microbit-dal.*`, and yotta
+    prefixes the generated symbol with `YOTTA_CFG_MICROBIT_DAL_` regardless.
+  - Changed: `config.json` (already renamed in the working tree by the user);
+    `yotta_cfg_mappings.h` `#ifdef`/`#define` (`YOTTA_CFG_MICROBIT_DAL_BLUETOOTH_FORCE_ENABLED_DAL_16KB`
+    -> `..._FORCE_ENABLED_16KB`); a stale `MICROBIT_BLE_FORCE_ENABLE_16KB` mention in a
+    `MicroBit.cpp` comment. `MicroBitConfig.h` needed no change (it only knows the macro name).
+  - Verified the yotta key -> symbol transformation independently of a rebuild:
+    `build/bbc-microbit-classic-gcc/yotta_config.h` already emits
+    `#define YOTTA_CFG_MICROBIT_DAL_BLUETOOTH_FORCE_ENABLED_16KB 0` from the renamed
+    `config.json`, which is exactly the symbol the new mapping tests.
+  - Failure mode to watch for if a consumer is missed: a stale `force_enabled_dal_16kb` key is
+    NOT an error — yotta happily emits the old symbol, nothing `#ifdef`s it, and
+    `MICROBIT_BLE_FORCE_ENABLED_16KB` silently falls back to its `MicroBitConfig.h` default of
+    0. I.e. the flag becomes a silent no-op (BLE stays gated off on 16KB), not a build break.
+    Same class of silent-no-op bug as the 2026-07-23 `SIMULATE_MINI1_ON_MINI2` name mismatch.
+  - pxt-microbit side handled too (`libs/bluetooth/pxt.json`); see
+    `pxt-microbit/docs/claude-cloud-compile-tag-mismatch.md` for the tag-pinning caveat — the
+    DAL change must be committed *and tagged* in `calliope-mini/microbit-dal` before cloud
+    builds see it.
+  - NOT rebuilt/reflashed by this session (user is running `yt build` themselves).
+
 - 2026-07-23 (on-device, corrects the largestFreeBlock() entry above): flashed with
   simulate_mini1_on_mini2=1. Reclaim confirmed working - serial showed
   `HEAP ram=32768 h0=3760 h1=8184 h2=0` (h1 = full ~8KB Soft Device reclaim, h2=0 as
